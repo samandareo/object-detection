@@ -2,5 +2,5 @@ venv
 new_model
 saved_detections
 tmp
-.streamlit
-.streamlit/secrets.toml
+streamlit
+streamlit/secrets.toml
