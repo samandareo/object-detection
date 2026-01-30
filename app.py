@@ -8,126 +8,157 @@ from pathlib import Path
 import cv2
 import numpy as np
 import streamlit as st
+import requests
 from PIL import Image
 from ultralytics import YOLO
 import google.generativeai as genai
-
+from streamlit_lottie import st_lottie
 
 # -----------------------------
 # 1. UI CONFIG & STYLING
 # -----------------------------
 st.set_page_config(
-    page_title="Fruit Quality AI", layout="wide", initial_sidebar_state="expanded"
+    page_title="Fruit Guard AI",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
+
+
+# Custom Lottie Loader
+@st.cache_data
+def load_lottieurl(url: str):
+    r = requests.get(url)
+    if r.status_code != 200:
+        return None
+    return r.json()
+
+
+# Load Assets
+# Robot scanning animation
+LOTTIE_ROBOT = "https://assets9.lottiefiles.com/packages/lf20_aa0wy04q.json"
+# Fallback valid URL if the above fails (using a known simple one for test stability if needed)
+# But we'll try a fresh one.
+# Alternative: "https://assets9.lottiefiles.com/packages/lf20_aa0wy04q.json" (AI Robot)
+
+lottie_robot_json = load_lottieurl(LOTTIE_ROBOT)
 
 st.markdown(
     """
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;700;900&family=Inter:wght@300;400;600&display=swap');
 
         /* GLOBAL THEME */
+        :root {
+            --bg-dark: #0f172a;
+            --bg-card: rgba(30, 41, 59, 0.6);
+            --primary: #06b6d4;  /* Cyan */
+            --accent: #ec4899;   /* Pink/Magenta */
+            --rotten: #ef4444;
+            --fresh: #22c55e;
+            --text-main: #f8fafc;
+            --text-sub: #94a3b8;
+        }
+
         html, body, [class*="css"] {
             font-family: 'Inter', sans-serif;
+            color: var(--text-main);
         }
         
         .stApp {
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-            color: #e2e8f0;
+            background: linear-gradient(135deg, #020617 0%, #172554 100%);
+            background-attachment: fixed;
         }
 
-        /* KEYFRAME ANIMATIONS */
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
-            to { opacity: 1; transform: translateY(0); }
+        h1, h2, h3, .brand-font {
+            font-family: 'Orbitron', sans-serif;
+            letter-spacing: 0.05em;
+        }
+
+        /* CARD STYLES */
+        .glass-card {
+            background: var(--bg-card);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 20px;
+            padding: 24px;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            margin-bottom: 20px;
         }
         
-        @keyframes pulse-red {
-            0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
-            70% { box-shadow: 0 0 0 10px rgba(239, 68, 68, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
-        }
-
-        @keyframes pulse-green {
-            0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); }
-            70% { box-shadow: 0 0 0 10px rgba(34, 197, 94, 0); }
-            100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
-        }
-
-        @keyframes border-flow {
-            0% { border-color: #3b82f6; }
-            50% { border-color: #8b5cf6; }
-            100% { border-color: #3b82f6; }
-        }
-
-        /* CUSTOM CLASSES */
-        .glass-card {
-            background: rgba(30, 41, 59, 0.7);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 16px;
-            padding: 20px;
-            margin-bottom: 20px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
-            animation: fadeIn 0.6s ease-out;
-        }
-
-        .hover-card {
-            transition: all 0.3s ease;
-        }
-        .hover-card:hover {
+        .glass-card:hover {
             transform: translateY(-5px);
-            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
-            border-color: #3b82f6;
+            box-shadow: 0 12px 40px 0 rgba(6, 182, 212, 0.15);
+            border-color: rgba(6, 182, 212, 0.3);
         }
 
-        .stat-value { font-size: 2rem; font-weight: 800; color: #f8fafc; }
-        .stat-label { color: #94a3b8; font-size: 0.875rem; text-transform: uppercase; letter-spacing: 0.05em; }
-
-        /* QUALITY BADGES */
-        .badge {
-            padding: 4px 12px;
-            border-radius: 9999px;
-            font-weight: 600;
-            font-size: 0.75rem;
-            display: inline-block;
+        /* ANIMATIONS */
+        @keyframes scanline {
+            0% { transform: translateY(-100%); }
+            100% { transform: translateY(100%); }
         }
-        .badge-fresh {
-            background: rgba(34, 197, 94, 0.2);
-            color: #4ade80;
-            border: 1px solid rgba(34, 197, 94, 0.3);
-        }
-        .badge-rotten {
-            background: rgba(239, 68, 68, 0.2);
-            color: #f87171;
-            border: 1px solid rgba(239, 68, 68, 0.3);
+        
+        .scanner-line {
+            position: absolute;
+            top: 0; left: 0; right: 0; height: 4px;
+            background: linear-gradient(to right, transparent, var(--primary), transparent);
+            opacity: 0.5;
+            animation: scanline 2.5s linear infinite;
+            pointer-events: none;
         }
 
-        /* LIVE FEED STYLING */
-        .live-feed-container {
-            border: 2px solid #334155;
-            border-radius: 12px;
-            overflow: hidden;
-            position: relative;
+        @keyframes pulse-glow {
+            0% { box-shadow: 0 0 0 0 rgba(6, 182, 212, 0.4); }
+            70% { box-shadow: 0 0 0 15px rgba(6, 182, 212, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(6, 182, 212, 0); }
         }
-        .recording-active {
-            animation: border-flow 2s infinite;
-            border-width: 2px;
-        }
-        .rec-dot {
+
+        .status-dot {
             height: 12px; width: 12px;
-            background-color: #ef4448;
             border-radius: 50%;
             display: inline-block;
             margin-right: 8px;
-            animation: pulse-red 2s infinite;
+        }
+        .status-active {
+            background-color: var(--primary);
+            animation: pulse-glow 2s infinite;
+        }
+        .status-rotten { background-color: var(--rotten); box-shadow: 0 0 10px var(--rotten); }
+        .status-fresh { background-color: var(--fresh); box-shadow: 0 0 10px var(--fresh); }
+
+        /* BUTTONS */
+        div[data-testid="stButton"] button {
+            background: linear-gradient(90deg, #06b6d4 0%, #3b82f6 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            padding: 0.5rem 1rem;
+            font-weight: 600;
+            font-family: 'Orbitron', sans-serif;
+            transition: all 0.3s ease;
+        }
+        div[data-testid="stButton"] button:hover {
+            transform: scale(1.02);
+            box-shadow: 0 0 20px rgba(6, 182, 212, 0.5);
         }
 
         /* SIDEBAR */
         section[data-testid="stSidebar"] {
-            background-color: #020617;
-            border-right: 1px solid #1e293b;
+            background-color: rgba(2, 6, 23, 0.95);
+            border-right: 1px solid rgba(255,255,255,0.05);
         }
-        
+
+        /* SCROLLBAR */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
+
     </style>
     """,
     unsafe_allow_html=True,
@@ -151,11 +182,11 @@ if "active_det" not in st.session_state:
 def load_yolo_model(path: str):
     try:
         if not os.path.exists(path):
-            st.error(f"YOLO model file not found: {path}")
+            st.error(f"YOLO model file not found: {path}", icon="🚨")
             st.stop()
         return YOLO(path)
     except Exception as e:
-        st.error(f"Failed to load YOLO model: {e}")
+        st.error(f"Failed to load YOLO model: {e}", icon="💥")
         st.stop()
 
 
@@ -182,14 +213,10 @@ def _safe_float(x) -> float:
 
 
 def save_detection(frame_bgr: np.ndarray, box, label: str, conf) -> str:
-    """
-    Saves a detection crop + JSON metadata.
-    """
     det_id = str(uuid.uuid4())[:8]
     try:
         xyxy = box.xyxy[0].detach().cpu().numpy().astype(int).tolist()
         x1, y1, x2, y2 = xyxy
-        # Padding for better context
         h, w = frame_bgr.shape[:2]
         pad = 20
         x1p = max(0, x1 - pad)
@@ -218,10 +245,6 @@ def save_detection(frame_bgr: np.ndarray, box, label: str, conf) -> str:
 
 
 def load_detection_metas(limit: int = 12):
-    """
-    Loads detection JSON files safely.
-    Backward compatible: if 'class_name' exists but 'label' doesn't, it is mapped.
-    """
     files = sorted(DETECTIONS_DIR.glob("*.json"), key=os.path.getmtime, reverse=True)
     metas = []
     for f in files[: max(limit * 3, limit)]:
@@ -234,7 +257,6 @@ def load_detection_metas(limit: int = 12):
             if len(metas) >= limit:
                 break
         except Exception as e:
-            st.warning(f"Failed to load detection meta: {e}")
             continue
     return metas
 
@@ -246,90 +268,117 @@ def clear_storage():
             try:
                 f.unlink()
                 cleared += 1
-            except Exception as e:
-                st.warning(f"Failed to delete file {f}: {e}")
+            except Exception:
+                pass
     st.session_state.active_det = None
     return cleared
 
 
 # -----------------------------
-# 3. SIDEBAR
+# 3. SIDEBAR (System Control)
 # -----------------------------
 with st.sidebar:
-    st.markdown(
-        "<h1 style='color: #38bdf8; font-weight: 800;'>🛡️ Fruit Guard</h1>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        "<div style='margin-top: -15px; color: #94a3b8; font-size: 0.9em;'>AI-Powered Quality Control</div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("---")
+    st.markdown("<div style='text-align: center;'>", unsafe_allow_html=True)
+    if lottie_robot_json:
+        st_lottie(lottie_robot_json, height=150, key="sidebar_anim")
+    st.markdown("</div>", unsafe_allow_html=True)
 
+    st.markdown(
+        """
+        <div style='text-align: center; margin-bottom: 20px;'>
+            <h1 style='color: #06b6d4; font-size: 24px; margin-bottom: 0;'>FRUIT GUARD</h1>
+            <div style='font-size: 10px; letter-spacing: 2px; color: #94a3b8; text-transform: uppercase;'>AI Vision System v2.0</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("### ⚙️ System Config")
     model_path = st.text_input("Model Path", "best.pt")
-    conf_threshold = st.slider("Min Confidence (display)", 0.1, 1.0, 0.45)
+    conf_threshold = st.slider("Sensitivity (Confidence)", 0.1, 1.0, 0.45)
 
-    st.divider()
-    save_only_above = st.slider("Save detections only above", 0.1, 1.0, 0.80)
-    cooldown_sec = st.slider("Cooldown between saves (sec)", 0.0, 10.0, 2.0, 0.5)
+    st.markdown("### 💾 Data Log")
+    save_only_above = st.slider("Auto-Save Threshold", 0.1, 1.0, 0.80)
+    cooldown_sec = st.slider("Capture Cooldown (s)", 0.0, 10.0, 2.0, 0.5)
 
-    st.divider()
-    if st.button("🧹 Clear All Storage (tmp + detections)", use_container_width=True):
+    st.markdown("---")
+    if st.button("FORMAT STORAGE", use_container_width=True):
         n = clear_storage()
-        st.success(f"Cleared {n} stored files.")
+        st.toast(f"System Purged: {n} files deleted.", icon="🗑️")
+        time.sleep(1)
         st.rerun()
 
-    st.caption(
-        "Expected classes: fresh_apple, fresh_banana, fresh_orange, "
-        "rotten_apple, rotten_banana, rotten_orange."
+    st.markdown(
+        """
+        <div style='margin-top: 20px; padding: 10px; border-radius: 8px; background: rgba(255,255,255,0.05); font-size: 0.8em; color: #64748b;'>
+        <strong>Classes:</strong><br>
+        • Fresh: apple, banana, orange<br>
+        • Rotten: apple, banana, orange
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
 
 # -----------------------------
 # 4. MAIN WORKSPACE
 # -----------------------------
-col_vid, col_ai = st.columns([1.4, 1], gap="large")
+
+# Header Area with stats or welcome
+col_head1, col_head2 = st.columns([2, 1])
+with col_head1:
+    st.markdown(
+        "<h1 style='font-size: 3em;'>LIVE OPS CENTER</h1>", unsafe_allow_html=True
+    )
+with col_head2:
+    pass
+
+
+col_vid, col_ai = st.columns([1.5, 1], gap="large")
 
 with col_vid:
-    st.subheader("🎥 Intelligent Feed")
+    st.markdown("### 📡 Visual Feed Input")
 
-    input_source = st.radio(
-        "Select Input Source", ["Upload Video", "Sample Video"], horizontal=True
+    # Custom Tab-like toggle
+    input_mode = st.radio(
+        "Source",
+        ["Upload File", "Sample Library"],
+        horizontal=True,
+        label_visibility="collapsed",
     )
 
     video_file = None
     selected_sample_path = None
 
-    if input_source == "Upload Video":
+    if input_mode == "Upload File":
         video_file = st.file_uploader(
-            "Upload Inspection Video", type=["mp4", "mov", "avi"]
+            "", type=["mp4", "mov", "avi"], label_visibility="collapsed"
         )
     else:
         sample_dir = Path("sample_videos")
         if sample_dir.exists():
             sample_files = sorted([f.name for f in sample_dir.glob("*.mp4")])
-            selected_sample = st.selectbox("Choose a sample video", sample_files)
+            selected_sample = st.selectbox("Select Sample Stream", sample_files)
             if selected_sample:
                 selected_sample_path = sample_dir / selected_sample
         else:
-            st.warning("sample_videos directory not found.")
+            st.warning("Library 'sample_videos' offline.")
 
     video_screen = st.empty()
 
-    b1, b2 = st.columns(2)
+    c_ctrl1, c_ctrl2 = st.columns(2)
 
-    # Enable start button if either a file is uploaded OR a sample is selected
-    is_ready = (input_source == "Upload Video" and video_file is not None) or (
-        input_source == "Sample Video" and selected_sample_path is not None
+    is_ready = (input_mode == "Upload File" and video_file is not None) or (
+        input_mode == "Sample Library" and selected_sample_path is not None
     )
 
-    start_btn = b1.button(
-        "🚀 Start Quality Analysis",
+    start_btn = c_ctrl1.button(
+        "▶ INITIATE SCAN",
         use_container_width=True,
-        type="primary",
         disabled=not is_ready,
+        type="primary",
     )
-    stop_btn = b2.button("⏹ Stop", use_container_width=True)
+    stop_btn = c_ctrl2.button("⏹ TERMINATE", use_container_width=True)
 
     if "stop_requested" not in st.session_state:
         st.session_state.stop_requested = False
@@ -340,214 +389,160 @@ with col_vid:
 
     if start_btn and is_ready:
         st.session_state.stop_requested = False
-
-        # Reset processed IDs for new run
         st.session_state.processed_ids = set()
 
         if not Path(model_path).exists():
-            st.error(f"Model file not found: {model_path}")
+            st.error(f"Neural Network Weights Missing: {model_path}")
             st.stop()
 
         final_video_path = None
-
-        if input_source == "Upload Video":
-            # Save uploaded video into tmp/
+        if input_mode == "Upload File":
             tmp_video_path = (
                 TMP_DIR / f"upload_{uuid.uuid4().hex[:8]}_{Path(video_file.name).name}"
             )
-            try:
-                with open(tmp_video_path, "wb") as f:
-                    f.write(video_file.read())
-                final_video_path = tmp_video_path
-            except Exception as e:
-                st.error(f"Failed to save uploaded video: {e}")
-                st.stop()
+            with open(tmp_video_path, "wb") as f:
+                f.write(video_file.read())
+            final_video_path = tmp_video_path
         else:
             final_video_path = selected_sample_path
 
-        try:
-            cap = cv2.VideoCapture(str(final_video_path))
-            if not cap.isOpened():
-                st.error("Could not open the uploaded video.")
-                st.stop()
+        cap = cv2.VideoCapture(str(final_video_path))
+        model = load_yolo_model(model_path)
 
-            model = load_yolo_model(model_path)
+        while cap.isOpened():
+            if st.session_state.stop_requested:
+                st.warning("Process Aborted by User.")
+                break
 
-            last_save_time = 0.0
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-            while cap.isOpened():
-                if st.session_state.stop_requested:
-                    st.warning("Stopped by user.")
-                    break
+            results = model.track(
+                frame, conf=conf_threshold, persist=True, verbose=False
+            )
 
-                ret, frame = cap.read()
-                if not ret:
-                    break
+            # Processing Logic
+            for r in results:
+                for box in r.boxes:
+                    if box.id is not None:
+                        track_id = int(box.id.item())
+                        if track_id not in st.session_state.processed_ids:
+                            cls_id = int(box.cls[0].item())
+                            label = model.names.get(cls_id, str(cls_id))
+                            conf = _safe_float(box.conf[0])
 
-                try:
-                    # Use YOLOv8 tracking
-                    # persist=True is important for tracking objects across frames
-                    results = model.track(
-                        frame, conf=conf_threshold, persist=True, verbose=False
-                    )
-                except Exception as e:
-                    st.warning(f"Prediction failed: {e}")
-                    break
+                            if conf >= save_only_above:
+                                if save_detection(frame, box, label, conf):
+                                    st.session_state.processed_ids.add(track_id)
 
-                now = time.time()
-                # Save detections based on Unique Track ID
-                for r in results:
-                    for box in r.boxes:
-                        try:
-                            # Check if we have a track ID
-                            if box.id is not None:
-                                track_id = int(box.id.item())
+            # Display
+            annotated_frame = results[0].plot()
+            video_screen.empty()
+            with video_screen.container():
+                st.markdown(
+                    """
+                    <div style="position: relative; border: 2px solid #06b6d4; border-radius: 12px; overflow: hidden; box-shadow: 0 0 20px rgba(6, 182, 212, 0.2);">
+                        <div class="scanner-line"></div>
+                        <div style="position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); padding: 4px 8px; border-radius: 4px; color: #06b6d4; font-family: 'Orbitron'; font-size: 0.8em; z-index: 10;">
+                            LIVE FEED • REC
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                st.image(annotated_frame, channels="BGR", use_container_width=True)
 
-                                # Only process if we haven't seen this ID before
-                                if track_id not in st.session_state.processed_ids:
-                                    cls_id = int(box.cls[0].detach().cpu().numpy())
-                                    label = model.names.get(cls_id, str(cls_id))
-                                    conf = _safe_float(box.conf[0])
-
-                                    if conf >= save_only_above:
-                                        det_id = save_detection(frame, box, label, conf)
-                                        if det_id:
-                                            st.session_state.processed_ids.add(track_id)
-                                            last_save_time = now  # Keep for reference, though not primarily used for cooldown anymore
-                        except Exception as e:
-                            # Often happens if box.id is None during first few frames of detection or low confidence
-                            pass
-
-                try:
-                    annotated_frame = results[0].plot()
-
-                    # Styled container wrapper for the video feed
-                    video_screen.empty()
-                    with video_screen.container():
-                        st.markdown(
-                            """
-                            <div class="live-feed-container recording-active">
-                                <div style="position: absolute; top: 10px; left: 10px; z-index: 10; background: rgba(0,0,0,0.6); padding: 5px 10px; border-radius: 8px;">
-                                    <span class="rec-dot"></span> <span style="color:white; font-weight:bold; font-size: 0.8em;">LIVE ANALYSIS</span>
-                                </div>
-                            </div>
-                            """,
-                            unsafe_allow_html=True,
-                        )
-                        st.image(
-                            annotated_frame, channels="BGR", use_container_width=True
-                        )
-
-                except Exception as e:
-                    st.warning(f"Failed to display annotated frame: {e}")
-
-            cap.release()
-            st.success("Analysis Complete. Review findings in the right panel.")
-
-        finally:
-            # Cleanup only if it was an uploaded file
-            if (
-                input_source == "Upload Video"
-                and final_video_path
-                and final_video_path.exists()
-            ):
-                # Optional: delete tmp file
-                pass
+        cap.release()
+        st.success("Sequence Complete.")
 
 
 # -----------------------------
-# 5. OBJECT GALLERY & AI CHAT
+# 5. ANALYSIS PANEL
 # -----------------------------
 with col_ai:
-    st.subheader("🔎 Inspection Gallery")
+    st.markdown("### 🧬 Analysis Hub")
 
-    # 1. DETAIL VIEW (TOP)
     active = st.session_state.active_det
 
     if active:
-        # Styled Detail View
+        # Highlight logic
+        is_rotten = "rotten" in active.get("label", "").lower()
+        border_col = "#ef4444" if is_rotten else "#22c55e"
+        glow_col = "rgba(239, 68, 68, 0.4)" if is_rotten else "rgba(34, 197, 94, 0.4)"
+        status_text = "CRITICAL" if is_rotten else "OPTIMAL"
+
         st.markdown(
             f"""
-        <div class="glass-card" style="border-left: 5px solid {"#ef4448" if "rotten" in active.get("label", "").lower() else "#22c55e"};">
-            <h3 style="margin:0; padding-bottom: 10px;">Selected Inspection</h3>
-        </div>
-        """,
+            <div class="glass-card" style="border: 1px solid {border_col}; box-shadow: 0 0 30px {glow_col};">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                    <div style="font-family: 'Orbitron'; font-size: 1.2em; font-weight: bold;">OBJECT #{active.get("id")}</div>
+                    <div style="background: {border_col}; color: #000; padding: 2px 8px; border-radius: 4px; font-weight: bold; font-size: 0.8em;">{status_text}</div>
+                </div>
+                <div style="display: flex; gap: 15px;">
+                    <div style="flex: 1;">
+                        <img src="app/active_img" style="width: 100%; border-radius: 8px; display: none;" /> 
+                        <!-- Image handled by st.image below for security/path ease -->
+                    </div>
+                </div>
+            </div>
+            """,
             unsafe_allow_html=True,
         )
 
-        c1, c2 = st.columns([1, 1.5], gap="medium")
-
+        c_img, c_det = st.columns([1, 1.2])
         apath = active.get("image_path", "")
-        alabel = active.get("label", "unknown_label")
-        aconf = float(active.get("confidence", 0.0))
 
-        with c1:
+        with c_img:
             if apath and Path(apath).exists():
                 st.image(apath, use_container_width=True)
-            else:
-                st.warning("Active image missing")
 
-        with c2:
-            quality_class = (
-                "badge-rotten" if "rotten" in alabel.lower() else "badge-fresh"
-            )
-            quality_text = "ROTTEN" if "rotten" in alabel.lower() else "FRESH"
+        with c_det:
+            st.markdown(f"**Class:** `{active.get('label').upper()}`")
+            st.markdown(f"**Confidence:** `{float(active.get('confidence', 0)):.1%}`")
+            st.markdown(f"**Timestamp:** `{active.get('timestamp')}`")
 
-            st.markdown(
-                f"""
-            <div style="font-size: 2em; font-weight: 800; margin-bottom: 5px;">{alabel.replace("_", " ").title()}</div>
-            <div style="display:flex; gap: 10px; align-items:center; margin-bottom: 15px;">
-                <span class="badge {quality_class}" style="font-size: 1em; padding: 6px 12px;">{quality_text}</span>
-            </div>
-            """,
-                unsafe_allow_html=True,
-            )
-
-            st.markdown(
-                f"**Conf:** `{aconf:.1%}` | **Time:** `{active.get('timestamp', '--:--')}`"
-            )
-
-        # Gemini Chat for Active Item
-        with st.expander("💬 Ask AI about this item", expanded=False):
+        # Chat Interface
+        with st.expander("💬 AI FORENSICS", expanded=True):
             gemini = get_gemini_model()
             if not gemini:
-                st.warning("Gemini API key not found.")
+                st.error("AI Module Offline (Missing API Key)")
             else:
-                chat_id = f"chat_{active.get('id', 'unknown')}"
+                chat_id = f"chat_{active.get('id')}"
                 if chat_id not in st.session_state:
                     st.session_state[chat_id] = []
 
+                # Chat history
                 for m in st.session_state[chat_id]:
                     with st.chat_message(m["role"]):
                         st.write(m["content"])
 
-                prompt = st.chat_input("Ask question...", key="chat_input")
-                if prompt:
+                if prompt := st.chat_input("Query analysis module..."):
                     st.session_state[chat_id].append(
                         {"role": "user", "content": prompt}
                     )
                     st.rerun()
 
-                # Handle chat response after rerun if last message is user
+                # Response generation
                 if (
                     st.session_state[chat_id]
                     and st.session_state[chat_id][-1]["role"] == "user"
                 ):
-                    with st.spinner("AI is thinking..."):
+                    with st.spinner("Processing neural request..."):
                         try:
-                            last_prompt = st.session_state[chat_id][-1]["content"]
+                            last_p = st.session_state[chat_id][-1]["content"]
                             if apath and Path(apath).exists():
-                                response = gemini.generate_content(
+                                resp = gemini.generate_content(
                                     [
-                                        f"Context: YOLO detected this as {alabel}. Analysis asked: {last_prompt}",
+                                        f"System Alert: Object detected as {active.get('label')}. User Query: {last_p}",
                                         Image.open(apath).convert("RGB"),
                                     ]
                                 )
-                                answer = response.text or "No response."
+                                answer = resp.text
                             else:
-                                answer = "Image not found for AI analysis."
+                                answer = "Visual data corrupted/missing."
                         except Exception as e:
-                            answer = f"Error: {e}"
+                            answer = f"System Error: {e}"
 
                         st.session_state[chat_id].append(
                             {"role": "assistant", "content": answer}
@@ -555,44 +550,34 @@ with col_ai:
                         st.rerun()
 
     else:
-        st.info("Select an item from the list below to inspect details.", icon="👇")
+        st.info("Awaiting Selection... Initiate scan or select from history.", icon="ℹ️")
 
-    st.divider()
+    st.markdown("### 🖼️ Detection Gallery")
 
-    # 2. SCROLLABLE LIST (BOTTOM)
-    st.markdown("### Recent Detections")
-
-    all_metas = load_detection_metas(limit=20)
-
+    # History Grid
+    all_metas = load_detection_metas(limit=10)
     if not all_metas:
-        st.caption("No detections yet.")
+        st.write("Gallery Empty")
     else:
-        # Scrollable container
         with st.container(height=500):
-            # Use 2 columns for compact list
-            cols = st.columns(2)
-
+            # Responsive Grid Layout
+            grid_cols = st.columns(2)
             for i, meta in enumerate(all_metas):
-                with cols[i % 2]:
-                    label = (meta.get("label") or "Unknown").replace("_", " ").title()
-                    is_rotten = "rotten" in meta.get("label", "").lower()
-                    border_color = "#ef4448" if is_rotten else "#22c55e"
+                col_idx = i % 2
+                with grid_cols[col_idx]:
+                    is_rot = "rotten" in meta.get("label", "").lower()
 
                     with st.container(border=True):
-                        c_img, c_info = st.columns([1, 1.5])
+                        # Custom mini-card
+                        ip = meta.get("image_path")
+                        if ip and Path(ip).exists():
+                            st.image(ip, use_container_width=True)
 
-                        img_path = meta.get("image_path", "")
-                        with c_img:
-                            if img_path and Path(img_path).exists():
-                                st.image(img_path, use_container_width=True)
+                        st.markdown(f"**{meta.get('label', 'Unknown').upper()}**")
+                        st.caption(f"ID: {meta.get('id')} | {meta.get('timestamp')}")
 
-                        with c_info:
-                            st.markdown(f"**{label}**")
-                            st.caption(f"{meta.get('timestamp')}")
-                            if st.button(
-                                "View",
-                                key=f"btn_{meta['id']}",
-                                use_container_width=True,
-                            ):
-                                st.session_state.active_det = meta
-                                st.rerun()
+                        if st.button(
+                            "INSPECT", key=f"btn_{meta['id']}", use_container_width=True
+                        ):
+                            st.session_state.active_det = meta
+                            st.rerun()
